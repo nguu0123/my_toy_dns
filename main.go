@@ -1,118 +1,25 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
+	"flag"
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/rs/zerolog"
 )
-
-const (
-	TYPE_A   = 1
-	CLASS_IN = 1
-)
-
-type DnsHeader struct {
-	id             int
-	flags          int
-	numQuestions   int
-	numAnswers     int
-	numAuthorities int
-	numAdditionals int
-}
-
-type DnsQuestion struct {
-	name   []byte
-	qType  int
-	qClass int
-}
-
-func HeaderToBytes(header DnsHeader) ([]byte, error) {
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, uint16(header.id))
-	if err != nil {
-		return nil, err
-	}
-	err = binary.Write(buf, binary.BigEndian, uint16(header.flags))
-	if err != nil {
-		return nil, err
-	}
-	err = binary.Write(buf, binary.BigEndian, uint16(header.numQuestions))
-	if err != nil {
-		return nil, err
-	}
-	err = binary.Write(buf, binary.BigEndian, uint16(header.numAnswers))
-	if err != nil {
-		return nil, err
-	}
-	err = binary.Write(buf, binary.BigEndian, uint16(header.numAuthorities))
-	if err != nil {
-		return nil, err
-	}
-	err = binary.Write(buf, binary.BigEndian, uint16(header.numAdditionals))
-	if err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-func QuestionToBytes(question DnsQuestion) ([]byte, error) {
-	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, uint16(question.qType))
-	if err != nil {
-		return nil, err
-	}
-	err = binary.Write(buf, binary.BigEndian, uint16(question.qClass))
-	if err != nil {
-		return nil, err
-	}
-
-	// fmt.Println("question.name", question.name)
-	return append(question.name, buf.Bytes()...), nil
-}
-
-func EncodeDnsName(domain_name string) ([]byte, error) {
-	buf := new(bytes.Buffer)
-	for _, part := range strings.Split(domain_name, ".") {
-		if len(part) > 63 {
-			return nil, fmt.Errorf("label too long: %s", part)
-		}
-		buf.WriteByte(byte(len(part)))
-		_, err := buf.Write([]byte(part))
-		if err != nil {
-			return nil, err
-		}
-	}
-	buf.WriteByte(0x00)
-	return buf.Bytes(), nil
-}
-
-func BuildQuery(domain_name string, record_type int) ([]byte, error) {
-	name, err := EncodeDnsName(domain_name)
-	if err != nil {
-		return nil, err
-	}
-	id := 0x8298
-	RECURSION_DESIRED := 1 << 8
-	header := DnsHeader{id: id, numQuestions: 1, flags: RECURSION_DESIRED}
-	question := DnsQuestion{name: name, qType: record_type, qClass: CLASS_IN}
-	headerBytes, err := HeaderToBytes(header)
-	if err != nil {
-		return nil, err
-	}
-	questionBytes, err := QuestionToBytes(question)
-	if err != nil {
-		return nil, err
-	}
-
-	return append(headerBytes, questionBytes...), err
-}
 
 func main() {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
+	debug := flag.Bool("debug", false, "sets log level to debug")
+
+	flag.Parse()
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	if *debug {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	}
 	domain_name := os.Args[1]
 	query, err := BuildQuery(domain_name, 1)
 	if err != nil {
@@ -144,4 +51,25 @@ func main() {
 
 	response := buf[:n]
 	fmt.Printf("Received %d bytes:\n% x\n", n, response)
+
+	dnsHeader, err := ParseHeaderFromBuf(response[:12])
+	if err != nil {
+		panic(fmt.Errorf("failed to parse DNS header: %w", err))
+	}
+
+	fmt.Println(dnsHeader)
+
+	dnsQuestion, err := DecodeDnsQuestion(response[12:])
+	fmt.Println(dnsQuestion)
+
+	dnsRecord, err := DecodeDnsRecord(response[12+len(dnsQuestion.name)+4:])
+	fmt.Println(dnsRecord)
+	// name := []byte{0x03, 'w', 'w', 'w', 0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00, 0x00, 0x01, 0x00, 0x01}
+	//
+	// question := DnsQuestion{name: name, qType: 1, qClass: 1}
+
+	// data, err := QuestionToBytes(question)
+	// if err != nil {
+	// 	panic(err)
+	// }
 }
